@@ -41,6 +41,7 @@ MAINTENANCE:Sistem bakım modundadır.
 ## 5. Haberleşme Paketi Tasarımı
 
 SystemState;Temp;Motor1;ConveyorSpeed;ProductCount;RejectCount;Pressure;Humidity;AlarmState
+
 Örnek veri: 1;36;1;120;245;3;5.2;45;0
 
 ## 6. SCADA Ekran Tasarımı
