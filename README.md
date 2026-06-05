@@ -1,7 +1,11 @@
 # SCADA/MES Üretim Hattı Simülasyon Sistemi - Sistem Tasarımı
 
 ## 1. Proje Amacı
-Bu proje, PLC, SCADA ve MES sistemlerinin birlikte çalışma mantığını öğrenmek amacıyla tasarlanmıştır. Gerçek bir üretim hattı simüle edilerek üretim verilerinin TCP/IP üzerinden aktarılması, izlenmesi, kayıt altına alınması ve analiz edilmesi hedeflenmektedir.
+Bu proje, C# WinForms kullanılarak geliştirilmiş basit bir SCADA benzeri gerçek zamanlı izleme sistemidir.
+
+Sistem, bir üretim hattını simüle ederek sıcaklık, hız, üretim miktarı, hata sayısı, basınç ve nem gibi verileri TCP/IP üzerinden anlık olarak üretir ve istemci uygulamaya aktarır. Gelen veriler arayüzde grafikler ile görselleştirilir ve durumlara göre alarm sistemi çalışır.
+
+Ayrıca tüm veriler geçmişe dönük analiz için SQL Server veritabanına kaydedilmekte ve yedek amaçlı CSV dosyasına da yazılmaktadır.
 
 ## 2. Sistem Mimarisi
 Sensörler → PLC Simülatörü (Server) → TCP/IP Haberleşmesi → SCADA İstemcisi (Client) → MES Analiz Katmanı
