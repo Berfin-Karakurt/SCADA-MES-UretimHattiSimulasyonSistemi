@@ -1,18 +1,1 @@
-CREATE DATABASE SCADA_DB;
-GO
-
-USE SCADA_DB;
-SELECT * FROM SensorData;
-GO
-
-CREATE TABLE SensorData (
-    ID INT IDENTITY(1,1) PRIMARY KEY,
-    TimeStamp DATETIME,
-    Temperature INT,
-    Speed INT,
-    Produced INT,
-    Reject INT,
-    Pressure INT,
-    Humidity INT
-);
 
