@@ -1,0 +1,404 @@
+﻿using System;
+using System.Drawing;
+using System.IO;
+using System.Net.Sockets;
+using System.Text;
+using System.Windows.Forms;
+using System.Windows.Forms.DataVisualization.Charting;
+using System.Data.SqlClient;
+
+namespace SonProjeClient
+{
+    public partial class Form1 : Form
+    {
+        DateTime lastSqlSaveTime = DateTime.Now;
+        int sqlSaveIntervalMs = 2000; // 2 saniyede bir kayıt 
+
+        string connStr = @"Server=localhost\SQLEXPRESS;Database=SCADA_DB;Trusted_Connection=True;";
+        TcpClient client;
+        NetworkStream stream;
+
+        int totalAlarmCount = 0;
+        int packetLostCount = 0;
+        int checksumErrorCount = 0;
+        int lastPacketID = -1;
+
+        DateTime lastDataTime = DateTime.Now;
+        bool lastAlarmState = false;
+
+        StringBuilder bufferData = new StringBuilder();
+
+        int timeoutCounter = 0;
+        const int timeoutLimit = 3;
+
+
+
+        public Form1()
+        {
+            InitializeComponent();
+        }
+
+        
+        
+        
+        private void Form1_Load(object sender, EventArgs e)
+        {
+
+            chartTemp.Series.Clear();
+            chartTemp.ChartAreas.Clear();
+
+            ChartArea area = new ChartArea("Main");
+            chartTemp.ChartAreas.Add(area);
+
+            // SICAKLIK
+            Series sicaklik = new Series("Sicaklik");
+            sicaklik.ChartType = SeriesChartType.Line;
+            sicaklik.BorderWidth = 2;
+            sicaklik.ChartArea = "Main";
+            chartTemp.Series.Add(sicaklik);
+
+            // HIZ
+            Series hiz = new Series("Hiz");
+            hiz.ChartType = SeriesChartType.Line;
+            hiz.BorderWidth = 2;
+            hiz.ChartArea = "Main";
+            chartTemp.Series.Add(hiz);
+
+            btnYenidenBaslat.Enabled = false;
+
+        }
+
+        
+        // CONNECT
+        
+        private void btnBaglan_Click(object sender, EventArgs e)
+        {
+            try
+            {
+                client = new TcpClient();
+                client.Connect("127.0.0.1", 5000);
+
+                stream = client.GetStream();
+
+                lblBaglanti.Text = "BAĞLI";
+                lblBaglanti.BackColor = Color.Green;
+
+                timer1.Interval = 500;
+                timer1.Start();
+            }
+            catch
+            {
+                MessageBox.Show("Bağlantı sağlanamadı!");
+            }
+        }
+
+        
+        // DISCONNECT
+        
+        private void btnKes_Click(object sender, EventArgs e)
+        {
+            timer1.Stop();
+            stream?.Close();
+            client?.Close();
+
+            lblBaglanti.Text = "KOPUK";
+            lblBaglanti.BackColor = Color.Red;
+        }
+
+        
+        // TIMER (DATA READ)
+        
+        private void timer1_Tick(object sender, EventArgs e)
+        {
+            try
+            {
+                if (stream != null && stream.DataAvailable)
+                {
+                    byte[] data = new byte[4096];
+                    int bytes = stream.Read(data, 0, data.Length);
+
+                    bufferData.Append(Encoding.ASCII.GetString(data, 0, bytes));
+
+                    string allData = bufferData.ToString();
+                    string[] packets = allData.Split('\n');
+
+                    bufferData.Clear();
+
+                    for (int i = 0; i < packets.Length - 1; i++)
+                        ProcessPacket(packets[i]);
+
+                    bufferData.Append(packets[packets.Length - 1]);
+
+                    timeoutCounter = 0;
+                    lastDataTime = DateTime.Now;
+                }
+
+                CheckTimeout();
+            }
+            catch
+            {
+                lblBaglanti.Text = "KOPUK";
+                lblBaglanti.BackColor = Color.Red;
+            }
+        }
+
+        
+        // PROCESS PACKET
+       
+        void ProcessPacket(string data)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(data))
+                    return;
+
+                string[] d = data.Split(';');
+
+                if (d.Length != 10)
+                    return;
+
+                int speed = Convert.ToInt32(d[5]);
+                
+
+                int packetID = Convert.ToInt32(d[0]);
+                int state = Convert.ToInt32(d[2]);
+                int temp = Convert.ToInt32(d[3]);
+
+                double prod = Convert.ToDouble(d[6]);
+                double rej = Convert.ToDouble(d[7]);
+
+                if (lastPacketID != -1 && packetID > lastPacketID + 1)
+                    packetLostCount += (packetID - lastPacketID - 1);
+
+                lastPacketID = packetID;
+
+                
+                this.Invoke((MethodInvoker)delegate
+                {
+                    lblTime.Text = d[1];
+                    lblTemp.Text = temp + " °C";
+                    
+
+                    lblMotor.Text = d[4] == "1" ? "ÇALIŞIYOR" : "DURUYOR";
+
+                    lblSpeed.Text = d[5];
+                    lblProduced.Text = d[6];
+                    lblReject.Text = d[7];
+
+                    lblPressure.Text = d[8] + " Bar";
+                    lblHumidity.Text = d[9] + " %";
+
+                    lblPacketLost.Text = packetLostCount.ToString();
+
+                    if (prod > 0)
+                        lblEfficiency.Text = (((prod - rej) / prod) * 100).ToString("F2") + " %";
+
+                    if ((prod + rej) > 0)
+                        lblRejectRate.Text = ((rej / (prod + rej)) * 100).ToString("F2") + " %";
+
+                   
+                    // CHART 
+                    
+                    try
+                    {
+                        chartTemp.Series["Sicaklik"].Points.AddY(temp);
+                        chartTemp.Series["Hiz"].Points.AddY(speed);
+
+                        if (chartTemp.Series["Sicaklik"].Points.Count > 30)
+                        {
+                            chartTemp.Series["Sicaklik"].Points.RemoveAt(0);
+                            chartTemp.Series["Hiz"].Points.RemoveAt(0);
+                        }
+
+                        chartTemp.Invalidate();
+                    }
+                    catch (Exception ex)
+                    {
+                        System.Diagnostics.Debug.WriteLine("Grafik hatası: " + ex.Message);
+                    }
+
+                    listBoxLog.BeginUpdate();
+                    listBoxLog.Items.Insert(0, DateTime.Now.ToString("HH:mm:ss") + " | " + data);
+                    listBoxLog.EndUpdate();
+
+                    HandleAlarm(temp, state);
+
+                    if ((DateTime.Now - lastSqlSaveTime).TotalMilliseconds >= sqlSaveIntervalMs)
+                    {
+                        lastSqlSaveTime = DateTime.Now;
+
+                        SaveToSql(
+                            temp,
+                            speed,
+                            Convert.ToInt32(prod),
+                            Convert.ToInt32(rej),
+                            Convert.ToInt32(d[8]),
+                            Convert.ToInt32(d[9])
+                        );
+                    }
+
+                });
+
+                SaveToCsv(data);
+                lastDataTime = DateTime.Now;
+            }
+            catch
+            {
+                
+            }
+        }
+
+        // ALARM
+        
+        void HandleAlarm(int temp, int state)
+        {
+            bool currentAlarm = (state == 2 || temp > 40);
+
+            if (currentAlarm && !lastAlarmState)
+            {
+                totalAlarmCount++;
+                lblTotalAlarm.Text = totalAlarmCount.ToString();
+            }
+
+            lastAlarmState = currentAlarm;
+
+            if (currentAlarm)
+            {
+                lblAlarm.Text = "ALARM";
+                lblAlarm.BackColor = Color.Red;
+            }
+            else if (temp > 35)
+            {
+                lblAlarm.Text = "WARNING";
+                lblAlarm.BackColor = Color.Orange;
+            }
+            else
+            {
+                lblAlarm.Text = "NORMAL";
+                lblAlarm.BackColor = Color.Green;
+            }
+        }
+
+        
+        // TIMEOUT
+        
+        void CheckTimeout()
+        {
+            timeoutCounter++;
+
+            if (timeoutCounter >= timeoutLimit)
+            {
+                lblBaglanti.Text = "TIMEOUT";
+                lblBaglanti.BackColor = Color.Yellow;
+
+                timer1.Stop();
+
+                btnYenidenBaslat.Enabled = true; 
+            }
+        }
+
+        
+        // CSV LOG
+        
+        void SaveToCsv(string veri)
+        {
+            File.AppendAllText("VeriKayit.csv",
+                DateTime.Now.ToString("HH:mm:ss") + ";" + veri + Environment.NewLine);
+        }
+
+        void SaveToSql(int temp, int speed, int produced, int reject, int pressure, int humidity)
+        {
+            try
+            {
+                using (SqlConnection conn = new SqlConnection(connStr))
+                {
+                    conn.Open();
+
+                    string query = @"
+                INSERT INTO SensorData 
+                (TimeStamp, Temperature, Speed, Produced, Reject, Pressure, Humidity)
+                VALUES
+                (@TimeStamp, @Temperature, @Speed, @Produced, @Reject, @Pressure, @Humidity)";
+
+                    using (SqlCommand cmd = new SqlCommand(query, conn))
+                    {
+                        cmd.Parameters.AddWithValue("@TimeStamp", DateTime.Now);
+                        cmd.Parameters.AddWithValue("@Temperature", temp);
+                        cmd.Parameters.AddWithValue("@Speed", speed);
+                        cmd.Parameters.AddWithValue("@Produced", produced);
+                        cmd.Parameters.AddWithValue("@Reject", reject);
+                        cmd.Parameters.AddWithValue("@Pressure", pressure);
+                        cmd.Parameters.AddWithValue("@Humidity", humidity);
+
+                        cmd.ExecuteNonQuery();
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine("SQL Hata: " + ex.Message);
+            }
+        }
+
+        private void btnMotorBaslat_Click(object sender, EventArgs e)
+        {
+            try
+            {
+                if (stream != null)
+                {
+                    byte[] komut =
+                        Encoding.ASCII.GetBytes("START\n");
+
+                    stream.Write(komut, 0, komut.Length);
+                }
+            }
+            catch
+            {
+            }
+        }
+
+        private void btnYenidenBaslat_Click(object sender, EventArgs e)
+        {
+            try
+            {
+                if (stream != null)
+                {
+                    byte[] komut =
+                        Encoding.ASCII.GetBytes("RESTART\n");
+
+                    stream.Write(komut, 0, komut.Length);
+                    stream.Flush();
+                }
+
+                timeoutCounter = 0;
+
+                lblBaglanti.Text = "BAĞLI";
+                lblBaglanti.BackColor = Color.Green;
+
+                btnYenidenBaslat.Enabled = false;
+
+                timer1.Start();
+            }
+            catch
+            {
+                MessageBox.Show("Yeniden başlatma başarısız");
+            }
+        }
+
+        private void btnSqlTest_Click(object sender, EventArgs e)
+        {
+            try
+            {
+                using (SqlConnection conn = new SqlConnection(connStr))
+                {
+                    conn.Open();
+                    MessageBox.Show("SQL BAĞLANTI BAŞARILI");
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("HATA: " + ex.Message);
+            }
+        }
+    }
+}
